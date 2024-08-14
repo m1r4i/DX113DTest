@@ -44,13 +44,16 @@ float lightAmbient = { 0.3f };
 
 struct ConstantBuffer {
     DirectX::XMMATRIX world;
-    DirectX::XMFLOAT4X4 inWorld;
+    DirectX::XMMATRIX inWorld;
     DirectX::XMMATRIX view;
     DirectX::XMMATRIX projection;
     DirectX::XMFLOAT4 lightCol;
     DirectX::XMFLOAT3 lightLoc;
     float lightAmbient;
+    DirectX::XMFLOAT3 eyePos;
+    float padding;
 };
+
 
 enum EMODE {
     CAM,
@@ -247,7 +250,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     // シェーダーの初期化
     ID3DBlob* pVSBlob = nullptr;
-    HRESULT hr = CompileShaderFromFile(L"shader.hlsl", "VS", "vs_5_0", &pVSBlob);
+    HRESULT hr = CompileShaderFromFile(L"shader2.hlsl", "VS", "vs_5_0", &pVSBlob);
     if (FAILED(hr)) {
         MessageBox(nullptr, "The FX file cannot be compiled. Please run this executable from the directory that contains the FX file.", "Error", MB_OK);
         return hr;
@@ -270,7 +273,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     pContext->IASetInputLayout(pInputLayout);
 
     ID3DBlob* pPSBlob = nullptr;
-    hr = CompileShaderFromFile(L"shader.hlsl", "PS", "ps_5_0", &pPSBlob);
+    hr = CompileShaderFromFile(L"shader2.hlsl", "PS", "ps_5_0", &pPSBlob);
     if (FAILED(hr)) {
         MessageBox(nullptr, "The FX file cannot be compiled. Please run this executable from the directory that contains the FX file.", "Error", MB_OK);
         return hr;
@@ -301,21 +304,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     // ワールド行列の逆行列を計算
     DirectX::XMMATRIX worldInverseTransposeMatrix = DirectX::XMMatrixInverse(nullptr, worldMatrix);
 
-    // XMFLOAT4X4 型の変数を用意
-    DirectX::XMFLOAT4X4 worldInverseTranspose;
-
-    // XMMATRIX から XMFLOAT4X4 への変換
-    DirectX::XMStoreFloat4x4(&worldInverseTranspose, worldInverseTransposeMatrix);
-
 
     ConstantBuffer cb;
     cb.world = XMMatrixTranspose(worldMatrix);
-    cb.inWorld = worldInverseTranspose;
+    cb.inWorld = worldInverseTransposeMatrix;
     cb.view = XMMatrixTranspose(viewMatrix);
     cb.projection = XMMatrixTranspose(projectionMatrix);
     cb.lightAmbient = lightAmbient;
     cb.lightLoc = lightLocation;
     cb.lightCol = lightColor;
+    cb.eyePos = eye;
     pContext->UpdateSubresource(pConstantBuffer, 0, nullptr, &cb, 0, 0);
     pContext->VSSetConstantBuffers(0, 1, &pConstantBuffer);
     pContext->PSSetConstantBuffers(0, 1, &pConstantBuffer);
@@ -380,8 +378,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     depthStencilDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
     depthStencilDesc.CPUAccessFlags = 0;
 
-    pDevice->CreateTexture2D(&depthStencilDesc, nullptr, &depthStencilBuffer);
-    /*
+    hr = pDevice->CreateTexture2D(&depthStencilDesc, nullptr, &depthStencilBuffer);
+    if (FAILED(hr)) {
+        MessageBox(nullptr, "Failed to create depth stencil buffer", "Error", MB_OK);
+        return hr;
+    }
+
+    D3D11_DEPTH_STENCIL_DESC dsDesc = {};
+    dsDesc.DepthEnable = TRUE;
+    dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    dsDesc.DepthFunc = D3D11_COMPARISON_LESS;  // 近いピクセルを優先して描画
+
+    ID3D11DepthStencilState* pDSState;
+    pDevice->CreateDepthStencilState(&dsDesc, &pDSState);
+    pContext->OMSetDepthStencilState(pDSState, 1);
+
     // 深度ステンシルビューの作成
     ID3D11DepthStencilView* pDepthStencilView = nullptr;
     D3D11_DEPTH_STENCIL_VIEW_DESC depthStencilViewDesc = {};
@@ -389,15 +400,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     depthStencilViewDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
     depthStencilViewDesc.Texture2D.MipSlice = 0;
 
-    pDevice->CreateDepthStencilView(depthStencilBuffer, &depthStencilViewDesc, &pDepthStencilView);
+    hr = pDevice->CreateDepthStencilView(depthStencilBuffer, &depthStencilViewDesc, &pDepthStencilView);
+    if (FAILED(hr)) {
+        MessageBox(nullptr, "Failed to create depth stencil view", "Error", MB_OK);
+        return hr;
+    }
 
     // レンダーターゲットと深度ステンシルビューを設定
     pContext->OMSetRenderTargets(1, &pRTV, pDepthStencilView);
 
+    // 深度ステンシルバッファのクリア
     float depthClear = 1.0f;
     UINT8 stencilClear = 0;
     pContext->ClearDepthStencilView(pDepthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, depthClear, stencilClear);
-    */
+
 
 
     MSG msg = {};
@@ -432,16 +448,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         // ワールド行列の逆行列を計算
         DirectX::XMMATRIX worldInverseTransposeMatrix = DirectX::XMMatrixInverse(nullptr, cb.world);
 
-        // XMFLOAT4X4 型の変数を用意
-        DirectX::XMFLOAT4X4 worldInverseTranspose;
-
-        // XMMATRIX から XMFLOAT4X4 への変換
-        DirectX::XMStoreFloat4x4(&worldInverseTranspose, worldInverseTransposeMatrix);
-        cb.inWorld = worldInverseTranspose;
+        cb.inWorld = worldInverseTransposeMatrix;
         cb.projection = XMMatrixTranspose(projectionMatrix);
         cb.lightAmbient = lightAmbient;
         cb.lightLoc = lightLocation;
         cb.lightCol = lightColor;
+        cb.eyePos = eye;
         UpdateViewMatrix(cb);
 
         float ClearColor[4] = { 0.0f, 0.125f, 0.3f, 1.0f };
@@ -452,6 +464,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         pContext->IASetVertexBuffers(0, 1, &pVertexBuffer, &stride, &offset);
         pContext->IASetIndexBuffer(pIndexBuffer, DXGI_FORMAT_R32_UINT, 0);
         pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        pContext->ClearDepthStencilView(pDepthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
 
         pContext->VSSetShader(pVertexShader, nullptr, 0);
         pContext->PSSetShader(pPixelShader, nullptr, 0);
